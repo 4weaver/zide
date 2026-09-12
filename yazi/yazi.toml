@@ -1,4 +1,24 @@
-[manager]
+# yazi config for zide's picker pane.
+#
+# Deliberately minimal. There USED to be an auto-layout.yazi plugin here
+# (yazi/init.lua -> require("auto-layout")) that switched the column count by
+# pane width. It is gone on purpose: upstream declared it incompatible with
+# yazi >= 25.x (the Tab:layout API it hooked was replaced), and on yazi 26.x
+# it does not error — it silently overrides the layout with zero-width chunks,
+# so the picker pane renders EMPTY (keys still work: `a` opens the create-file
+# dialog, which is why it looks alive). Upstream's own advice is "you should
+# not use this plugin" on current yazi.
+#   https://github.com/josephschmitt/auto-layout.yazi
+#
+# Without it yazi uses its built-in ratio below. The pane is 40 cols by
+# layout, so the preview column is mostly wasted, but a correct 3-column view
+# beats a blank one. If width-adaptive columns are ever wanted again, do it
+# with a plain `ratio` change or the maintained alternatives
+# (max-preview.yazi / hide-preview.yazi), NOT the Tab:layout hook.
+
+# Built-in manager columns: parent, current, preview (1:1:2 of the pane).
+# [mgr] is the modern spelling; [manager] still works but is deprecated.
+[mgr]
 ratio = [1, 1, 2]
 
 [opener]
