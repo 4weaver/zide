@@ -125,26 +125,39 @@
           # session exists and to join the existing one, and only build the
           # layout when this process actually created it.
           #
-          # Detection must NOT create the session: `attach --create-background`
-          # succeeds by making it, after which `options --session-name` fails
-          # for the opposite reason. So ask first, then choose one path.
+          # Three cases, and `options --session-name` only handles the third:
+          #   1. LIVE  session of this name -> attach (join it, keep panes)
+          #   2. DEAD  session of this name -> attach (zellij resurrects it)
+          #   3. no session                -> options, to build it WITH layout
           #
-          # `list-sessions` prints both live and resurrectable sessions, so
-          # EXITED rows must be filtered out — otherwise a dead session from a
-          # previous boot would look live and we would attach to a ghost.
-          # ANSI colour codes are stripped first because the name is wrapped
-          # in them. ponytail: this greps human output, so a future zellij
-          # that renames its columns breaks it — the failure is a fresh
-          # session instead of a join, not a broken cockpit.
-          is_live() {
+          # Case 2 is the one that bit: `options --session-name` refuses a name
+          # whose session is dead-but-resurrectable, printing
+          #   Session with name "zide" already exists, but is dead.
+          # and exits without doing anything. A cockpit that has ever been
+          # connected before is EXACTLY this case — zellij keeps the session
+          # serialized (session_serialization true) after the last client
+          # leaves — so the naive version fails on every ordinary reconnect,
+          # not just an edge case.
+          #
+          # Both live and dead are therefore routed to `attach`, which is
+          # create-or-join-or-resurrect. Only a genuinely absent name gets the
+          # layout treatment.
+          #
+          # Detection must NOT create anything: `attach --create-background`
+          # would make the session, and then `options` fails for case 1.
+          # ponytail: greps human-readable output, so a future zellij that
+          # renames its columns breaks the match — the cost is choosing case 3
+          # when it should be 1/2, i.e. a fresh layout session rather than a
+          # join, never a crashed cockpit.
+          session_exists() {
             zellij list-sessions 2>/dev/null \
               | sed 's/\x1b\[[0-9;]*m//g' \
-              | grep -E "^$1 \[" \
-              | grep -qv EXITED
+              | grep -qE "^$1 \["
           }
-          if is_live "$name"; then
-            # Already running: join it as-is. Rebuilding the layout here would
-            # stack a second picker/editor tab onto an existing cockpit.
+          if session_exists "$name"; then
+            # Live (join) or dead (resurrect). Either way the layout is
+            # already in the session; rebuilding it would stack a second
+            # picker/editor tab onto the cockpit.
             exec zellij attach "$name"
           fi
           # Not running (or never created): build it with the layout.
