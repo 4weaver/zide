@@ -70,10 +70,10 @@
       # KNOWN session — the browser cockpit above all, where a new random
       # session per connection would defeat `attach --create <name>`.
       #
-      # `zellij -s <name> --layout <path>` is the documented incantation
-      # (-s = "Specify name of a new session", -l = layout file path), and it
-      # is what this wrapper uses instead of upstream's path. Verified: yields
-      # a session named as asked, with the picker + editor panes.
+      # `zellij -s <name> -n <layout>` is the incantation that does both:
+      # -s names the session, -n/--new-session-with-layout applies the
+      # layout. (`-s --layout` alone does NOT work: with a named session
+      # --layout is treated as a new TAB and the session never gets created.)
       #
       # Kept as a SEPARATE attr so upstream's `zide` stays byte-identical and
       # can still do its own random-naming thing for interactive use.
@@ -94,79 +94,57 @@
           }
           cd "$dir" || exit 1
           # How to get BOTH a chosen session name AND the layout's panes.
-          # Measured on zellij 0.45.1 — the obvious spellings do not work:
-          #   zellij --layout L         -> panes yes, but a RANDOM session
-          #                              name (unique-cymbal, rusty-magpie…)
-          #   zellij -s nm              -> named, no layout
-          #   zellij -s nm --layout L   -> NO socket created at all
-          #   attach -b nm (+new-tab L) -> named, but the tab is EMPTY
-          # --layout's help explains it: the layout applies "if inside a
-          # session (or using the --session flag)" as a TAB, otherwise it
-          # starts a session — so -s and --layout are alternatives, not a
-          # pair. And there is no session-rename to fix up a random name
-          # afterwards (`action --help` lists only rename-pane/-tab).
+          # Measured on zellij 0.45.1, each spelling run for real (PTY, not
+          # inferred from --help):
+          #   zellij --layout L          -> layout YES, session name RANDOM
+          #                                 (circular-accordion, …)
+          #   zellij -s nm               -> named, NO layout
+          #   zellij -s nm --layout L    -> does NOT create; fails with
+          #                                 `Session 'nm' not found` (because
+          #                                 --layout applies as a TAB when the
+          #                                 session is named, and there is none)
+          #   zellij -s nm -n L          -> named AND layout  <-- this one
           #
-          # `zellij options --session-name NAME --layout-dir DIR` is the one
-          # spelling that gives both: a session named NAME with the layout's
-          # picker + editor panes. --layout-dir takes a DIRECTORY, so the
-          # layout is selected by basename (that is why `layout` here is a
-          # bare name, not the .kdl path).
-          # zellij then scans --layout-dir for the named layout.
+          # -n / --new-session-with-layout is the flag the earlier version of
+          # this wrapper missed; it takes a layout PATH and is documented as
+          # "Will start a new session". Verified: `-s vF -n <path>` produces
+          # one named session whose tab has the layout's picker+editor panes
+          # (selectable_tiled_panes_count 2), where `-s vF` alone gives 1.
           #
-          # But `options --session-name` only CREATES. Against a session that
-          # already exists it dies with `Session with name "X" already
-          # exists` — and exit 0, so a caller cannot even detect the failure,
-          # it just gets a dead connection. Every browser connection after the
-          # first hits this, which is exactly the cockpit's normal case.
+          # So there is no need for the old three-case dance around
+          # `options --session-name` (which only CREATES, and refuses a
+          # dead-but-resurrectable name — i.e. every ordinary reconnect,
+          # since session_serialization keeps the session after the last
+          # client leaves) plus a human-output `list-sessions` grep.
           #
-          # `attach` is the create-if-absent primitive, but it cannot apply a
-          # layout (measured: attach -b + `new-tab --layout` leaves the tab
-          # EMPTY). So the two are combined: attach first to guarantee the
-          # session exists and to join the existing one, and only build the
-          # layout when this process actually created it.
+          # But -s only ever CREATES. Against an existing session it dies
+          # with `Session with name "X" already exists. Use attach command…`
+          # and exit 1 — a dead connection on every reconnect, which is the
+          # cockpit's normal case (every browser connection after the first).
           #
-          # Three cases, and `options --session-name` only handles the third:
-          #   1. LIVE  session of this name -> attach (join it, keep panes)
-          #   2. DEAD  session of this name -> attach (zellij resurrects it)
-          #   3. no session                -> options, to build it WITH layout
+          # So the only question is: does it already exist? That must be
+          # answered WITHOUT creating anything — `zellij attach` is
+          # create-if-absent, so probing with it always "succeeds" and the
+          # bare session it makes is exactly the one-pane bug.
           #
-          # Case 2 is the one that bit: `options --session-name` refuses a name
-          # whose session is dead-but-resurrectable, printing
-          #   Session with name "zide" already exists, but is dead.
-          # and exits without doing anything. A cockpit that has ever been
-          # connected before is EXACTLY this case — zellij keeps the session
-          # serialized (session_serialization true) after the last client
-          # leaves — so the naive version fails on every ordinary reconnect,
-          # not just an edge case.
-          #
-          # Both live and dead are therefore routed to `attach`, which is
-          # create-or-join-or-resurrect. Only a genuinely absent name gets the
-          # layout treatment.
-          #
-          # Detection must NOT create anything: `attach --create-background`
-          # would make the session, and then `options` fails for case 1.
-          # ponytail: greps human-readable output, so a future zellij that
-          # renames its columns breaks the match — the cost is choosing case 3
-          # when it should be 1/2, i.e. a fresh layout session rather than a
-          # join, never a crashed cockpit.
-          session_exists() {
-            zellij list-sessions 2>/dev/null \
-              | sed 's/\x1b\[[0-9;]*m//g' \
-              | grep -qE "^$1 \["
-          }
-          if session_exists "$name"; then
-            # Live (join) or dead (resurrect). Either way the layout is
-            # already in the session; rebuilding it would stack a second
-            # picker/editor tab onto the cockpit.
+          # Detect on the socket instead of on zellij's own output: zellij
+          # puts one file per live session in $XDG_RUNTIME_DIR/zellij/
+          # <contract_version>/ and has no other session there. A dead
+          # (serialized) session has NO socket, and `attach` resurrects it,
+          # which is what we want for that case anyway.
+          runtime_dir="''${XDG_RUNTIME_DIR:-/run/user/$(id -u)}"
+          if [ -S "$runtime_dir/zellij/contract_version_1/$name" ] \
+             || [ -S "$runtime_dir/zellij/0.45.1/$name" ]; then
             exec zellij attach "$name"
           fi
-          # Not running (or never created): build it with the layout.
-          # `options --session-name` is the only spelling that sets both the
-          # name and the layout's panes.
-          exec zellij options \
-            --session-name "$name" \
-            --layout-dir "$(dirname "$layout_path")" \
-            --default-layout "$layout"
+          # No socket means no live session: build it, layout and all.
+          # `-s` names it, `-n` applies the layout's panes.
+          exec zellij -s "$name" -n "$layout_path"
+          # ponytail: one socket test, no output parsing. The socket stat is
+          # the only zellij-internal detail here; if a future zellij renames
+          # the runtime dir the failure mode is a bare single-pane session
+          # (because -s -n then hits "already exists"), visible immediately
+          # in the browser — not a hang.
         '';
       };
     });
