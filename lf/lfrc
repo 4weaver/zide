@@ -1,12 +1,41 @@
+# lf config for zide's picker pane.
+#
+# Read via `lf -config <this file>` (see bin/zide-pick): lf has NO
+# LF_CONFIG_HOME — it only looks at /etc/lf/lfrc and ~/.config/lf/lfrc — so
+# -config is the one way to point it at a file here.
+#
+# Why lf rather than yazi: the picker pane is 40 columns
+# (layouts/default.kdl `filepicker size=40`). yazi's layout is a static
+# `[mgr] ratio` with no width awareness, and the plugin that used to adapt it
+# (auto-layout.yazi) hooked `Tab:layout()`, an API yazi >= 25 removed — on
+# current yazi it does not error, it silently paints an EMPTY pane. lf's
+# on-redraw sees the terminal width, so this pane can adapt for real.
+#
+# How `set ratios` behaves (lf(1)): the NUMBER OF ITEMS is the number of
+# panes, and with `preview` on the rightmost item is the preview width. A
+# single-pane view therefore needs `set preview false` AND a one-item ratios.
+#
+# Two traps, both hit while writing this:
+#  1. lf runs these bodies with `sh -c` and exports only a fixed set of vars
+#     (f, fs, fx, id, PWD, …). An `lf` that is merely on the parent PATH is NOT
+#     guaranteed to resolve here — when it failed, every redraw printed
+#     "lf: command not found" and the pane stayed at lf's stock 1:2:3.
+#     So: this file uses @lf@, which the flake substitutes for the absolute
+#     store path at build time (substituteInPlace in flake.nix). Do NOT use
+#     %lf% here — inside a `cmd` body it expands to an empty string, which
+#     turns every call into `-remote ...` (i.e. runs the current directory).
+#  2. `lf -remote` talks to the server over a socket, and `on-redraw` fires on
+#     every screen refresh — keep it to at most two remote calls per branch.
+
 cmd on-redraw %{{
     if [ $lf_width -le 40 ]; then
-        lf -remote "send $id set preview false"
-        lf -remote "send $id set ratios 1"
+        @lf@ -remote "send $id set preview false"
+        @lf@ -remote "send $id set ratios 1"
     elif [ $lf_width -le 80 ]; then
-        lf -remote "send $id set preview false"
-        lf -remote "send $id set ratios 1:1"
+        @lf@ -remote "send $id set preview true"
+        @lf@ -remote "send $id set ratios 1:2"
     else
-        lf -remote "send $id set preview true"
-        lf -remote "send $id set ratios 1:1:2"
+        @lf@ -remote "send $id set preview true"
+        @lf@ -remote "send $id set ratios 1:2:3"
     fi
 }}

@@ -13,7 +13,9 @@
 #      the pane dies, so the wrapper always sets it.
 #
 # The upstream scripts resolve their own directory ($ZIDE_DIR) and read
-# layouts/ + yazi/ relative to it, so all of those ship together in one output.
+# layouts/ + yazi/ + lf/ relative to it, so all of those ship together in one
+# output. (`lf/` was already in the repo but never copied or wired: the picker
+# had been running as yazi. See bin/zide-pick for why lf is now the default.)
 {
   description = "zide — zellij IDE-like layout environment (packaged for the arachnet cockpit)";
 
@@ -39,6 +41,19 @@
         cp -r ${./bin} $out/share/zide/bin
         cp -r ${./layouts} $out/share/zide/layouts
         cp -r ${./yazi} $out/share/zide/yazi
+        # The lf picker's config, read via `lf -config` (see bin/zide-pick;
+        # lf has no LF_CONFIG_HOME). It must sit at the tree root as lf/.
+        #
+        # substituteInPlace rewrites the @lf@ placeholder to the absolute store
+        # path of this lf. lf runs on-redraw bodies with `sh -c` and exports
+        # only a fixed set of vars, so a bare `lf` there resolves only if the
+        # parent PATH happens to carry it — it does not in the zellij pane, and
+        # the failure is silent apart from "lf: command not found" on the
+        # status line, leaving the pane at lf's stock ratios. An absolute path
+        # removes the dependency entirely.
+        cp -r ${./lf} $out/share/zide/lf
+        substituteInPlace $out/share/zide/lf/lfrc \
+          --replace-fail '@lf@' '${pkgs.lf}/bin/lf'
 
         chmod +x $out/share/zide/bin/*
 
@@ -49,6 +64,9 @@
             --set ZIDE_DIR $out/share/zide \
             --prefix PATH : ${pkgs.lib.makeBinPath [
               pkgs.zellij
+              # Both pickers ship so either can be selected at runtime
+              # (zide-pick defaults to lf; ZIDE_FILE_PICKER / -p switches).
+              pkgs.lf
               pkgs.yazi
               pkgs.bc
               pkgs.bash
